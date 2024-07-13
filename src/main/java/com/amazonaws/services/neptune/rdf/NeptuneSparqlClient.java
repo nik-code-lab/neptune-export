@@ -12,6 +12,7 @@ permissions and limitations under the License.
 
 package com.amazonaws.services.neptune.rdf;
 
+import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.neptune.auth.NeptuneSigV4SignerException;
 import com.amazonaws.services.neptune.cluster.ConnectionConfig;
@@ -21,9 +22,12 @@ import com.amazonaws.services.neptune.io.OutputWriter;
 import com.amazonaws.services.neptune.rdf.io.NeptuneExportSparqlRepository;
 import com.amazonaws.services.neptune.rdf.io.RdfTargetConfig;
 import com.amazonaws.services.neptune.util.EnvironmentVariableUtils;
+import org.apache.http.Header;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.impl.io.ChunkedInputStream;
+import org.apache.http.util.EntityUtils;
 import org.eclipse.rdf4j.http.client.HttpClientSessionManager;
 import org.eclipse.rdf4j.http.client.RDF4JProtocolSession;
 import org.eclipse.rdf4j.http.client.SPARQLProtocolSession;
@@ -34,6 +38,7 @@ import org.eclipse.rdf4j.repository.base.AbstractRepository;
 import org.eclipse.rdf4j.repository.sparql.SPARQLRepository;
 import org.eclipse.rdf4j.rio.ParserConfig;
 import org.eclipse.rdf4j.rio.RDFFormat;
+import org.eclipse.rdf4j.rio.RDFParseException;
 import org.eclipse.rdf4j.rio.RDFParser;
 import org.eclipse.rdf4j.rio.RDFWriter;
 import org.eclipse.rdf4j.rio.Rio;
@@ -42,6 +47,9 @@ import org.joda.time.DateTime;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Field;
+import java.net.URLDecoder;
 import java.util.List;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -133,7 +141,7 @@ public class NeptuneSparqlClient implements AutoCloseable {
 
         } catch (Exception e) {
             if (repository instanceof NeptuneExportSparqlRepository) {
-                throw new RuntimeException(((NeptuneExportSparqlRepository) repository).getErrorMessageFromTrailers(), e);
+                throw new AmazonServiceException(((NeptuneExportSparqlRepository) repository).getErrorMessageFromTrailers(), e);
             }
             else {
                 throw new RuntimeException(e);
@@ -153,7 +161,7 @@ public class NeptuneSparqlClient implements AutoCloseable {
 
         } catch (Exception e) {
             if (repository instanceof NeptuneExportSparqlRepository) {
-                throw new RuntimeException(((NeptuneExportSparqlRepository) repository).getErrorMessageFromTrailers(), e);
+                throw new AmazonServiceException(((NeptuneExportSparqlRepository) repository).getErrorMessageFromTrailers(), e);
             }
             else {
                 throw new RuntimeException(e);
@@ -181,6 +189,7 @@ public class NeptuneSparqlClient implements AutoCloseable {
         HttpClient httpClient = chooseRepository().getHttpClient();
         HttpUriRequest request = new HttpGet(getGSPEndpoint(graph));
         request.addHeader("Accept", "application/n-triples");
+        request.addHeader("te", "trailers");
 
         org.apache.http.HttpResponse response = httpClient.execute(request);
         InputStream responseBody = response.getEntity().getContent();
@@ -192,6 +201,8 @@ public class NeptuneSparqlClient implements AutoCloseable {
 
             try {
                 rdfParser.parse(responseBody);
+            } catch(RDFParseException e) {
+                throw new AmazonServiceException(getErrorMessageFromTrailers(response), e);
             } finally {
                 responseBody.close();
             }
@@ -215,6 +226,49 @@ public class NeptuneSparqlClient implements AutoCloseable {
                 connectionConfig.endpoints().iterator().next(),
                 connectionConfig.port(),
                 graphName);
+    }
+
+    /**
+     * Attempts to extract error messages from trailing headers from the most recent response received by 'repository'.
+     * If no trailers are found an empty String is returned.
+     */
+    static String getErrorMessageFromTrailers(org.apache.http.HttpResponse response) {
+        if (response == null) {
+            return "";
+        }
+        InputStream responseInStream;
+        try {
+            responseInStream = response.getEntity().getContent();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        // HTTPClient 4.5.13 provides no methods for accessing trailers from a wrapped stream requiring the use of
+        // reflection to break encapsulation. This bug is being tracked in https://issues.apache.org/jira/browse/HTTPCLIENT-2263.
+        while (!(responseInStream instanceof ChunkedInputStream)){
+            Field wrappedStreamField;
+            try {
+                wrappedStreamField = responseInStream.getClass().getDeclaredField("wrappedStream");
+                wrappedStreamField.setAccessible(true);
+                responseInStream = (InputStream) wrappedStreamField.get(responseInStream);
+                wrappedStreamField.setAccessible(false);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                return "";
+            }
+        }
+        // Consume remaining response, ensures trailers have been consumed and are available
+        EntityUtils.consumeQuietly(response.getEntity());
+
+        Header[] trailers = ((ChunkedInputStream) responseInStream).getFooters();
+        StringBuilder messageBuilder = new StringBuilder();
+        for (Header trailer : trailers) {
+            try {
+                messageBuilder.append(URLDecoder.decode(trailer.toString(), "UTF-8"));
+            } catch (UnsupportedEncodingException e) {
+                messageBuilder.append(trailer);
+            }
+            messageBuilder.append('\n');
+        }
+        return messageBuilder.toString();
     }
 
 }
