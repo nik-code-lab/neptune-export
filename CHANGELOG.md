@@ -1,5 +1,9 @@
 # Amazon Neptune Export CHANGELOG
 
+## Neptune Export v1.1.7 (Release Date: TBD):
+
+- Surface server errors for RDF GSP exports
+
 ## Neptune Export v1.1.6 (Release Date: April 17, 2024):
 
 ### Bug Fixes:
