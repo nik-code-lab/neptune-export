@@ -1,8 +1,14 @@
 # Amazon Neptune Export CHANGELOG
 
-## Neptune Export v1.1.7 (Release Date: TBD):
+## Neptune Export v1.1.7 (Release Date: July 15, 2024):
 
+### Bug Fixes
+
+- Support Neptune 1.3 parameter groups when `describeDBClusterParameterGroups` unavailable
 - Surface server errors for RDF GSP exports
+
+### New Features and Improvements:
+- Use AWS Batch Job ID as Neptune Export ID when available
 
 ## Neptune Export v1.1.6 (Release Date: April 17, 2024):
 
