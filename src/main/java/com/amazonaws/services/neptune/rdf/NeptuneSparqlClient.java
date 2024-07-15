@@ -22,6 +22,7 @@ import com.amazonaws.services.neptune.io.OutputWriter;
 import com.amazonaws.services.neptune.rdf.io.NeptuneExportSparqlRepository;
 import com.amazonaws.services.neptune.rdf.io.RdfTargetConfig;
 import com.amazonaws.services.neptune.util.EnvironmentVariableUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.http.Header;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
@@ -202,7 +203,14 @@ public class NeptuneSparqlClient implements AutoCloseable {
             try {
                 rdfParser.parse(responseBody);
             } catch(RDFParseException e) {
-                throw new AmazonServiceException(getErrorMessageFromTrailers(response), e);
+                String serverErrorMessage = getErrorMessageFromTrailers(response);
+                if (StringUtils.isNotEmpty(serverErrorMessage)) {
+                    throw new AmazonServiceException(getErrorMessageFromTrailers(response), e);
+                } else {
+                    // If no trailers are found, assume that e is a genuine parsing failure (likely due to contents of
+                    // response), and not a direct result of a server side error corrupting the response body.
+                    throw e;
+                }
             } finally {
                 responseBody.close();
             }
@@ -240,7 +248,7 @@ public class NeptuneSparqlClient implements AutoCloseable {
         try {
             responseInStream = response.getEntity().getContent();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            return "";
         }
         // HTTPClient 4.5.13 provides no methods for accessing trailers from a wrapped stream requiring the use of
         // reflection to break encapsulation. This bug is being tracked in https://issues.apache.org/jira/browse/HTTPCLIENT-2263.
@@ -251,7 +259,7 @@ public class NeptuneSparqlClient implements AutoCloseable {
                 wrappedStreamField.setAccessible(true);
                 responseInStream = (InputStream) wrappedStreamField.get(responseInStream);
                 wrappedStreamField.setAccessible(false);
-            } catch (NoSuchFieldException | IllegalAccessException e) {
+            } catch (Exception e) {
                 return "";
             }
         }
