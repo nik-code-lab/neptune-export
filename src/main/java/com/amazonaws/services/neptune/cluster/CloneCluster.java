@@ -13,6 +13,7 @@ permissions and limitations under the License.
 package com.amazonaws.services.neptune.cluster;
 
 import com.amazonaws.services.neptune.AmazonNeptune;
+import org.apache.commons.lang.StringUtils;
 
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -51,7 +52,17 @@ public class CloneCluster implements CloneClusterStrategy {
         }
 
         String clusterId = originalClusterMetadata.clusterId();
-        String targetClusterId = String.format("neptune-export-cluster-%s", UUID.randomUUID().toString().substring(0, 5));
+        String targetClusterIdSuffix = null;
+        try {
+            targetClusterIdSuffix = System.getenv("AWS_BATCH_JOB_ID"); // Use AWS Batch job id if running in Neptune Export Service
+        }
+        catch (SecurityException e) {
+            // Do nothing, will generate new ID if targetClusterIdSuffix is not set.
+        }
+        if (StringUtils.isEmpty(targetClusterIdSuffix)) {
+            targetClusterIdSuffix = UUID.randomUUID().toString().substring(0, 5);
+        }
+        String targetClusterId = String.format("neptune-export-cluster-%s", targetClusterIdSuffix);
 
         AddCloneTask addCloneTask = new AddCloneTask(
                 clusterId,
